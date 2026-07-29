@@ -1,230 +1,95 @@
 import sys
 import os
 import json
-import time
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QCheckBox, QFileDialog, QSlider,
-    QSpinBox, QMessageBox
+    QSpinBox, QDoubleSpinBox, QMessageBox, QGroupBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from pynput import keyboard, mouse
 
-# ==========================================
-# THREAD 1: RECORDER WORKER
-# ==========================================
+from recorder import Recorder
+from player import Player
+
+
 class RecordThread(QThread):
-    status_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(list)
 
     def __init__(self):
         super().__init__()
-        self.events = []
-        self.start_time = 0.0
-        self.is_paused = False
-        self.is_running = True
-        self.pause_offset = 0.0
-        self.pause_start = 0.0
-        self.mouse_listener = None
-        self.keyboard_listener = None
-
-    def get_elapsed_time(self):
-        if self.is_paused:
-            return self.pause_start - self.start_time - self.pause_offset
-        return time.time() - self.start_time - self.pause_offset
+        # Disable auto-hardcoded delays in recorder so we control them in Player GUI
+        self.recorder = Recorder(random_click_delay=False)
 
     def run(self):
-        self.events = []
-        self.start_time = time.time()
-        self.pause_offset = 0.0
+        self.recorder.start()
+        self.recorder.wait_until_done()
+        self.finished_signal.emit(self.recorder.events)
 
-        def on_move(x, y):
-            if not self.is_paused and self.is_running:
-                self.events.append({"type": "mouse_move", "time": self.get_elapsed_time(), "x": x, "y": y})
+    def get_elapsed_time(self):
+        return self.recorder.get_elapsed_time()
 
-        def on_click(x, y, button, pressed):
-            if not self.is_paused and self.is_running:
-                self.events.append({
-                    "type": "mouse_click", "time": self.get_elapsed_time(),
-                    "x": x, "y": y, "button": button.name, "pressed": pressed
-                })
-
-        def on_scroll(x, y, dx, dy):
-            if not self.is_paused and self.is_running:
-                self.events.append({
-                    "type": "mouse_scroll", "time": self.get_elapsed_time(),
-                    "x": x, "y": y, "dx": dx, "dy": dy
-                })
-
-        def on_press(key):
-            if not self.is_paused and self.is_running:
-                try:
-                    key_val = key.char
-                except AttributeError:
-                    key_val = str(key)
-                self.events.append({"type": "key_press", "time": self.get_elapsed_time(), "key": key_val})
-
-        def on_release(key):
-            if key == keyboard.Key.esc:
-                self.is_running = False
-                return False
-            if not self.is_paused and self.is_running:
-                try:
-                    key_val = key.char
-                except AttributeError:
-                    key_val = str(key)
-                self.events.append({"type": "key_release", "time": self.get_elapsed_time(), "key": key_val})
-
-        self.mouse_listener = mouse.Listener(on_move=on_move, on_click=on_click, on_scroll=on_scroll)
-        self.keyboard_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-
-        self.mouse_listener.start()
-        self.keyboard_listener.start()
-
-        while self.is_running:
-            time.sleep(0.05)
-
-        self.mouse_listener.stop()
-        self.keyboard_listener.stop()
-        self.finished_signal.emit(self.events)
+    @property
+    def is_paused(self):
+        return self.recorder.is_paused
 
     def pause(self):
-        if not self.is_paused:
-            self.is_paused = True
-            self.pause_start = time.time()
+        self.recorder.pause()
 
     def resume(self):
-        if self.is_paused:
-            self.pause_offset += (time.time() - self.pause_start)
-            self.is_paused = False
+        self.recorder.resume()
 
     def stop(self):
-        self.is_running = False
+        self.recorder.stop()
 
 
-# ==========================================
-# THREAD 2: PLAYER WORKER
-# ==========================================
 class PlayThread(QThread):
     progress_signal = pyqtSignal(float)
     finished_signal = pyqtSignal()
+    pause_state_signal = pyqtSignal(bool)
 
-    def __init__(self, events):
+    def __init__(self, events, enable_random_delay=False, min_delay=0.1, max_delay=0.5):
         super().__init__()
-        self.events = events
-        self.is_running = True
-        self.is_paused = False
-        self.seek_requested = False
-        self.target_time = 0.0
-        self.mouse_controller = mouse.Controller()
-        self.keyboard_controller = keyboard.Controller()
-
-    def parse_key(self, key_str):
-        if key_str is None:
-            return None
-        if key_str.startswith("Key."):
-            key_name = key_str.split(".")[1]
-            return getattr(keyboard.Key, key_name, None)
-        return key_str
+        self.player = Player(
+            events,
+            on_progress=self.progress_signal.emit,
+            on_state_change=self.pause_state_signal.emit,
+            enable_random_delay=enable_random_delay,
+            min_delay=min_delay,
+            max_delay=max_delay
+        )
 
     def run(self):
-        if not self.events:
-            self.finished_signal.emit()
-            return
-
-        current_index = 0
-
-        while current_index < len(self.events) and self.is_running:
-            if self.seek_requested:
-                self.seek_requested = False
-                current_index = 0
-                for idx, ev in enumerate(self.events):
-                    if ev["time"] >= self.target_time:
-                        current_index = idx
-                        break
-
-            if current_index >= len(self.events):
-                break
-
-            event = self.events[current_index]
-            current_time = event["time"]
-
-            self.progress_signal.emit(current_time)
-
-            if current_index < len(self.events) - 1:
-                next_time = self.events[current_index + 1]["time"]
-                delay = next_time - current_time
-
-                start_wait = time.time()
-                while time.time() - start_wait < delay and self.is_running:
-                    if self.seek_requested:
-                        break
-                    while self.is_paused and self.is_running and not self.seek_requested:
-                        time.sleep(0.05)
-                    time.sleep(0.01)
-
-            if self.seek_requested or not self.is_running:
-                if not self.seek_requested:
-                    break
-                continue
-
-            event_type = event["type"]
-            try:
-                if event_type == "mouse_move":
-                    self.mouse_controller.position = (event["x"], event["y"])
-                elif event_type == "mouse_click":
-                    btn = getattr(mouse.Button, event["button"])
-                    self.mouse_controller.position = (event["x"], event["y"])
-                    if event["pressed"]:
-                        self.mouse_controller.press(btn)
-                    else:
-                        self.mouse_controller.release(btn)
-                elif event_type == "mouse_scroll":
-                    self.mouse_controller.position = (event["x"], event["y"])
-                    self.mouse_controller.scroll(event["dx"], event["dy"])
-                elif event_type in ("key_press", "key_release"):
-                    key = self.parse_key(event["key"])
-                    if key is not None:
-                        if event_type == "key_press":
-                            self.keyboard_controller.press(key)
-                        else:
-                            self.keyboard_controller.release(key)
-            except Exception:
-                pass
-
-            current_index += 1
-
+        self.player.play()
         self.finished_signal.emit()
 
-    def seek_to(self, seconds):
-        self.target_time = seconds
-        self.seek_requested = True
+    @property
+    def is_paused(self):
+        return self.player.is_paused
 
     def pause(self):
-        self.is_paused = True
+        self.player.pause()
 
     def resume(self):
-        self.is_paused = False
+        self.player.resume()
 
     def stop(self):
-        self.is_running = False
+        self.player.stop()
+
+    def seek_to(self, seconds):
+        self.player.seek_to(seconds)
 
 
-# ==========================================
-# MAIN APPLICATION WINDOW
-# ==========================================
 class MacroApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Input Player")
-        self.setFixedSize(380, 310)  # Slightly heightened for timer spinboxes
+        self.setWindowTitle("Macro Controller")
+        self.setFixedSize(400, 380)
 
         self.record_thread = None
         self.play_thread = None
         self.loaded_events = []
         self.recording_duration = 0.0
 
-        # Timers for Recording Duration and Delay Countdowns
         self.rec_timer = QTimer()
         self.rec_timer.setInterval(100)
         self.rec_timer.timeout.connect(self.update_rec_time)
@@ -259,13 +124,11 @@ class MacroApp(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout()
 
-        # File Configuration
         file_layout = QHBoxLayout()
         self.filename_input = QLineEdit("recording.json")
         file_layout.addWidget(QLabel("File Name:"))
         file_layout.addWidget(self.filename_input)
 
-        # Directory Configuration
         dir_layout = QHBoxLayout()
         self.use_curr_dir_cb = QCheckBox("Use current location")
         self.use_curr_dir_cb.setChecked(True)
@@ -280,7 +143,6 @@ class MacroApp(QMainWindow):
         dir_layout.addWidget(self.path_input)
         dir_layout.addWidget(self.browse_btn)
 
-        # Delay Control
         delay_layout = QHBoxLayout()
         delay_layout.addWidget(QLabel("Start Delay (seconds):"))
         self.rec_delay_spin = QSpinBox()
@@ -288,13 +150,11 @@ class MacroApp(QMainWindow):
         self.rec_delay_spin.setValue(0)
         delay_layout.addWidget(self.rec_delay_spin)
 
-        # Status / Time Display
-        self.rec_status_lbl = QLabel("Ready (ESC key also stops recording)")
+        self.rec_status_lbl = QLabel("Ready (ESC key stops recording)")
         self.rec_time_lbl = QLabel("00:00.0")
         self.rec_time_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.rec_time_lbl.setStyleSheet("font-size: 16px; font-weight: bold;")
 
-        # Controls
         ctrl_layout = QHBoxLayout()
         self.rec_play_btn = QPushButton("Record")
         self.rec_pause_btn = QPushButton("Pause")
@@ -327,7 +187,6 @@ class MacroApp(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout()
 
-        # Load File Section
         load_layout = QHBoxLayout()
         self.load_path_input = QLineEdit()
         self.load_path_input.setPlaceholderText("Select .json file...")
@@ -337,7 +196,6 @@ class MacroApp(QMainWindow):
         load_layout.addWidget(self.load_path_input)
         load_layout.addWidget(self.load_btn)
 
-        # Delay Control
         delay_layout = QHBoxLayout()
         delay_layout.addWidget(QLabel("Start Delay (seconds):"))
         self.play_delay_spin = QSpinBox()
@@ -345,17 +203,38 @@ class MacroApp(QMainWindow):
         self.play_delay_spin.setValue(0)
         delay_layout.addWidget(self.play_delay_spin)
 
-        # Media Seek Slider
+        # Random Delay GUI Box
+        rnd_box = QGroupBox("Random Delay Controls")
+        rnd_layout = QVBoxLayout()
+
+        self.rnd_delay_cb = QCheckBox("Enable Random Delay After Clicks")
+        rnd_inputs = QHBoxLayout()
+        rnd_inputs.addWidget(QLabel("Min (s):"))
+        self.rnd_min_spin = QDoubleSpinBox()
+        self.rnd_min_spin.setRange(0.0, 10.0)
+        self.rnd_min_spin.setValue(0.1)
+        self.rnd_min_spin.setSingleStep(0.1)
+
+        rnd_inputs.addWidget(self.rnd_min_spin)
+        rnd_inputs.addWidget(QLabel("Max (s):"))
+        self.rnd_max_spin = QDoubleSpinBox()
+        self.rnd_max_spin.setRange(0.0, 10.0)
+        self.rnd_max_spin.setValue(0.5)
+        self.rnd_max_spin.setSingleStep(0.1)
+        rnd_inputs.addWidget(self.rnd_max_spin)
+
+        rnd_layout.addWidget(self.rnd_delay_cb)
+        rnd_layout.addLayout(rnd_inputs)
+        rnd_box.setLayout(rnd_layout)
+
         self.seek_slider = QSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setRange(0, 1000)
         self.seek_slider.setEnabled(False)
         self.seek_slider.sliderMoved.connect(self.user_seek)
 
-        # Media Time Counter
         self.play_time_lbl = QLabel("00:00 / 00:00")
         self.play_time_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Player Controls
         ctrl_layout = QHBoxLayout()
         self.play_start_btn = QPushButton("Play")
         self.play_pause_btn = QPushButton("Pause")
@@ -375,9 +254,13 @@ class MacroApp(QMainWindow):
 
         layout.addLayout(load_layout)
         layout.addLayout(delay_layout)
+        layout.addWidget(rnd_box)
         layout.addWidget(self.seek_slider)
         layout.addWidget(self.play_time_lbl)
         layout.addLayout(ctrl_layout)
+
+        self.play_status_lbl = QLabel("ESC pauses / resumes playback")
+        layout.addWidget(self.play_status_lbl)
 
         tab.setLayout(layout)
         return tab
@@ -529,9 +412,15 @@ class MacroApp(QMainWindow):
             self.execute_start_playback()
 
     def execute_start_playback(self):
-        self.play_thread = PlayThread(self.loaded_events)
+        self.play_thread = PlayThread(
+            self.loaded_events,
+            enable_random_delay=self.rnd_delay_cb.isChecked(),
+            min_delay=self.rnd_min_spin.value(),
+            max_delay=self.rnd_max_spin.value()
+        )
         self.play_thread.progress_signal.connect(self.on_playback_progress)
         self.play_thread.finished_signal.connect(self.on_playback_finished)
+        self.play_thread.pause_state_signal.connect(self.on_playback_pause_state_changed)
         self.play_thread.start()
 
         self.play_start_btn.setEnabled(False)
@@ -567,6 +456,10 @@ class MacroApp(QMainWindow):
             progress_ratio = current_time / self.recording_duration
             self.seek_slider.setValue(int(progress_ratio * 1000))
             self.update_playback_time_label(current_time)
+
+    def on_playback_pause_state_changed(self, is_paused):
+        self.play_start_btn.setEnabled(is_paused)
+        self.play_pause_btn.setEnabled(not is_paused)
 
     def on_playback_finished(self):
         self.play_start_btn.setText("Play")

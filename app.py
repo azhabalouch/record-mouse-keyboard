@@ -142,6 +142,36 @@ class TaskEasierApp(QMainWindow):
         self.init_ui()
         self.apply_enterprise_theme()
 
+    @staticmethod
+    def _is_thread_running(thread):
+        """Safely check if a QThread is running without raising RuntimeError if C++ object was deleted."""
+        if thread is None:
+            return False
+        try:
+            return thread.isRunning()
+        except RuntimeError:
+            return False
+
+    def closeEvent(self, event):
+        """Cleanly stop and wait for active QThreads when app window closes."""
+        if self.rec_delay_timer.isActive():
+            self.rec_delay_timer.stop()
+        if self.play_delay_timer.isActive():
+            self.play_delay_timer.stop()
+        self.rec_timer.stop()
+
+        if self._is_thread_running(self.record_thread):
+            self.record_thread.stop()
+            self.record_thread.quit()
+            self.record_thread.wait(1000)
+
+        if self._is_thread_running(self.play_thread):
+            self.play_thread.stop()
+            self.play_thread.quit()
+            self.play_thread.wait(1000)
+
+        event.accept()
+
     def init_ui(self):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(18, 18, 18, 18)
@@ -404,7 +434,7 @@ class TaskEasierApp(QMainWindow):
             self.path_input.setText(folder)
 
     def start_recording_flow(self):
-        if self.record_thread and self.record_thread.isRunning():
+        if self._is_thread_running(self.record_thread):
             if self.record_thread.is_paused:
                 self.record_thread.resume()
                 self.rec_status_lbl.setText("RECORDING IN PROGRESS — Press ESC to Stop")
@@ -431,8 +461,15 @@ class TaskEasierApp(QMainWindow):
             self.execute_start_recording()
 
     def execute_start_recording(self):
+        if self._is_thread_running(self.record_thread):
+            self.record_thread.stop()
+            self.record_thread.quit()
+            self.record_thread.wait(1000)
+
         self.record_thread = RecordThread(record_mouse_moves=self.rec_moves_cb.isChecked())
         self.record_thread.finished_signal.connect(self.on_recording_finished)
+        self.record_thread.finished.connect(self._cleanup_record_thread)
+        self.record_thread.finished.connect(self.record_thread.deleteLater)
         self.record_thread.start()
 
         self.rec_timer.start()
@@ -441,8 +478,11 @@ class TaskEasierApp(QMainWindow):
         self.rec_pause_btn.setEnabled(True)
         self.rec_stop_btn.setEnabled(True)
 
+    def _cleanup_record_thread(self):
+        self.record_thread = None
+
     def pause_recording(self):
-        if self.record_thread and self.record_thread.isRunning():
+        if self._is_thread_running(self.record_thread):
             self.record_thread.pause()
             self.rec_status_lbl.setText("RECORDING PAUSED")
             self.rec_play_btn.setEnabled(True)
@@ -456,12 +496,14 @@ class TaskEasierApp(QMainWindow):
             self.rec_status_lbl.setText("Recording cancelled.")
             return
 
-        if self.record_thread and self.record_thread.isRunning():
+        if self._is_thread_running(self.record_thread):
             self.record_thread.stop()
+            self.record_thread.quit()
+            self.record_thread.wait(1000)
         self.rec_timer.stop()
 
     def update_rec_time(self):
-        if self.record_thread and self.record_thread.isRunning():
+        if self._is_thread_running(self.record_thread):
             elapsed = self.record_thread.get_elapsed_time()
             mins, secs = divmod(elapsed, 60)
             self.rec_time_lbl.setText(f"{int(mins):02d}:{secs:04.1f}")
@@ -482,7 +524,6 @@ class TaskEasierApp(QMainWindow):
         self.rec_play_btn.setEnabled(True)
         self.rec_pause_btn.setEnabled(False)
         self.rec_stop_btn.setEnabled(False)
-        self.record_thread = None
 
         self.load_path_input.setText(save_path)
         if events:
@@ -519,7 +560,7 @@ class TaskEasierApp(QMainWindow):
         self.play_time_lbl.setText(f"{int(curr_m):02d}:{int(curr_s):02d} / {int(tot_m):02d}:{int(tot_s):02d}")
 
     def start_playback_flow(self):
-        if self.play_thread and self.play_thread.isRunning():
+        if self._is_thread_running(self.play_thread):
             if self.play_thread.is_paused:
                 self.play_thread.resume()
                 self.play_status_lbl.setText("PLAYBACK IN PROGRESS — Press ESC to Pause/Resume")
@@ -546,6 +587,11 @@ class TaskEasierApp(QMainWindow):
             self.execute_start_playback()
 
     def execute_start_playback(self):
+        if self._is_thread_running(self.play_thread):
+            self.play_thread.stop()
+            self.play_thread.quit()
+            self.play_thread.wait(1000)
+
         self.play_thread = PlayThread(
             self.loaded_events,
             speed=self.speed_spin.value(),
@@ -557,8 +603,9 @@ class TaskEasierApp(QMainWindow):
         self.play_thread.progress_signal.connect(self.on_playback_progress)
         self.play_thread.finished_signal.connect(self.on_playback_finished)
         self.play_thread.pause_state_signal.connect(self.on_playback_pause_state_changed)
+        self.play_thread.finished.connect(self._cleanup_play_thread)
+        self.play_thread.finished.connect(self.play_thread.deleteLater)
 
-        # Pre-seek if timeline was set prior to pressing play
         initial_seek_time = (self.seek_slider.value() / 1000.0) * self.recording_duration
         if initial_seek_time > 0:
             self.play_thread.seek_to(initial_seek_time)
@@ -570,8 +617,11 @@ class TaskEasierApp(QMainWindow):
         self.play_pause_btn.setEnabled(True)
         self.play_stop_btn.setEnabled(True)
 
+    def _cleanup_play_thread(self):
+        self.play_thread = None
+
     def pause_playback(self):
-        if self.play_thread and self.play_thread.isRunning():
+        if self._is_thread_running(self.play_thread):
             self.play_thread.pause()
             self.play_status_lbl.setText("PLAYBACK PAUSED")
 
@@ -583,14 +633,16 @@ class TaskEasierApp(QMainWindow):
             self.play_status_lbl.setText("Playback cancelled.")
             return
 
-        if self.play_thread and self.play_thread.isRunning():
+        if self._is_thread_running(self.play_thread):
             self.play_thread.stop()
+            self.play_thread.quit()
+            self.play_thread.wait(1000)
 
     def user_seek(self, value):
         if self.recording_duration > 0:
             target_time = (value / 1000.0) * self.recording_duration
             self.update_playback_time_label(target_time)
-            if self.play_thread and self.play_thread.isRunning():
+            if self._is_thread_running(self.play_thread):
                 self.play_thread.seek_to(target_time)
 
     def on_playback_progress(self, current_time):
@@ -610,7 +662,6 @@ class TaskEasierApp(QMainWindow):
         self.seek_slider.setValue(0)
         self.update_playback_time_label(0.0)
         self.play_status_lbl.setText("PLAYBACK COMPLETE")
-        self.play_thread = None
 
     def apply_enterprise_theme(self):
         enterprise_qss = """

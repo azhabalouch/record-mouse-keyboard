@@ -1,3 +1,9 @@
+"""
+input-editor.py
+---------------
+Task Easier — Macro Timeline Studio with Integrated Live Recorder
+"""
+
 import sys
 import os
 import json
@@ -7,8 +13,11 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QAbstractItemView, QMessageBox,
     QGroupBox, QStyle
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
+
+# Import the Recorder module
+from recorder import Recorder
 
 
 # ==========================================
@@ -30,93 +39,120 @@ def time_str_to_seconds(time_str: str) -> float:
 
 
 # ==========================================
-# MODERN DARK THEME STYLESHEET
+# THREADING FOR INTEGRATED RECORDER
+# ==========================================
+class EditorRecordThread(QThread):
+    finished_signal = pyqtSignal(list)
+
+    def __init__(self, record_mouse_moves=True):
+        super().__init__()
+        self.recorder = Recorder(record_mouse_moves=record_mouse_moves, random_click_delay=False)
+
+    def run(self):
+        self.recorder.start()
+        self.recorder.wait_until_done()
+        self.finished_signal.emit(self.recorder.events)
+
+    def stop(self):
+        self.recorder.stop()
+
+
+# ==========================================
+# MODERN ENTERPRISE DARK STYLESHEET
 # ==========================================
 DARK_STYLESHEET = """
 QMainWindow {
-    background-color: #181825;
+    background-color: #0f172a;
 }
 QWidget {
-    color: #cdd6f4;
-    font-family: "Aptos", "Fira Sans", "Segoe UI", sans-serif;
+    color: #f8fafc;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
     font-size: 13px;
 }
 QGroupBox {
     font-weight: bold;
-    border: 1px solid #313244;
+    border: 1px solid #1e293b;
     border-radius: 8px;
     margin-top: 6px;
     padding-top: 10px;
-    background-color: #1e1e2e;
+    background-color: #1e293b;
+    color: #0284c7;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     left: 10px;
     padding: 0 5px;
-    color: #89b4fa;
 }
 QPushButton {
-    background-color: #313244;
-    border: 1px solid #45475a;
+    background-color: #1e293b;
+    border: 1px solid #334155;
     border-radius: 6px;
     padding: 6px 12px;
     font-weight: 600;
-    color: #cdd6f4;
+    color: #f8fafc;
 }
 QPushButton:hover {
-    background-color: #45475a;
-    border-color: #89b4fa;
+    background-color: #334155;
+    border-color: #38bdf8;
 }
 QPushButton:pressed {
-    background-color: #585b70;
+    background-color: #0284c7;
 }
 QPushButton#primaryBtn {
-    background-color: #89b4fa;
-    color: #11111b;
+    background-color: #0284c7;
+    color: #ffffff;
     border: none;
 }
 QPushButton#primaryBtn:hover {
-    background-color: #b4befe;
+    background-color: #0369a1;
+}
+QPushButton#recordBtn {
+    background-color: #166534;
+    color: #ffffff;
+    border: none;
+}
+QPushButton#recordBtn:hover {
+    background-color: #15803d;
 }
 QPushButton#dangerBtn {
-    background-color: #f38ba8;
-    color: #11111b;
+    background-color: #991b1b;
+    color: #ffffff;
     border: none;
 }
 QPushButton#dangerBtn:hover {
-    background-color: #f5e0dc;
+    background-color: #dc2626;
 }
 QLineEdit {
-    background-color: #11111b;
-    border: 1px solid #45475a;
+    background-color: #020617;
+    border: 1px solid #334155;
     border-radius: 6px;
-    color: #cdd6f4;
+    color: #f8fafc;
     padding: 5px 8px;
 }
 QLineEdit:focus {
-    border-color: #89b4fa;
+    border-color: #38bdf8;
 }
 QTableWidget {
-    background-color: #11111b;
-    border: 1px solid #313244;
+    background-color: #020617;
+    border: 1px solid #1e293b;
     border-radius: 8px;
-    gridline-color: #313244;
-    color: #cdd6f4;
+    gridline-color: #1e293b;
+    color: #f8fafc;
 }
 QTableWidget::item:selected {
-    background-color: #45475a;
-    color: #89b4fa;
+    background-color: #334155;
+    color: #38bdf8;
 }
 QHeaderView::section {
-    background-color: #1e1e2e;
-    color: #89b4fa;
+    background-color: #1e293b;
+    color: #38bdf8;
     font-weight: bold;
-    border: 1px solid #313244;
+    border: 1px solid #1e293b;
     padding: 6px;
 }
 QLabel#statBox {
-    background-color: #1e1e2e;
-    border: 1px solid #313244;
+    background-color: #1e293b;
+    border: 1px solid #334155;
     border-radius: 6px;
     padding: 6px 12px;
     font-weight: bold;
@@ -130,12 +166,13 @@ QLabel#statBox {
 class MacroEditorApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("JSON Macro Timeline Studio")
-        self.resize(820, 580)
+        self.setWindowTitle("Task Easier — Macro Timeline Studio")
+        self.resize(900, 620)
         self.setStyleSheet(DARK_STYLESHEET)
 
         self.file_path = ""
         self.events = []
+        self.record_thread = None
 
         self.init_ui()
 
@@ -143,11 +180,10 @@ class MacroEditorApp(QMainWindow):
         main_layout = QVBoxLayout()
         main_layout.setSpacing(10)
 
-        # Get system standard icon provider
         sys_icon = self.style().standardIcon
 
         # --- TOP PANEL: FILE OPTIONS & FILTER ---
-        top_box = QGroupBox("File & Filter Tools")
+        top_box = QGroupBox("FILE & SEARCH TOOLS")
         top_layout = QHBoxLayout()
 
         self.path_input = QLineEdit()
@@ -215,6 +251,11 @@ class MacroEditorApp(QMainWindow):
         # --- TOOLBAR & ACTION BUTTONS ---
         btn_layout = QHBoxLayout()
 
+        self.btn_record_new = QPushButton("Record Action")
+        self.btn_record_new.setObjectName("recordBtn")
+        self.btn_record_new.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.btn_record_new.clicked.connect(self.start_live_recording)
+
         self.btn_up = QPushButton("Move Up")
         self.btn_up.setIcon(sys_icon(QStyle.StandardPixmap.SP_ArrowUp))
         self.btn_up.clicked.connect(lambda: self.move_event(-1))
@@ -232,6 +273,10 @@ class MacroEditorApp(QMainWindow):
         self.btn_delete.setIcon(sys_icon(QStyle.StandardPixmap.SP_TrashIcon))
         self.btn_delete.clicked.connect(self.delete_selected_rows)
 
+        self.btn_sort = QPushButton("Sort Chronologically")
+        self.btn_sort.setIcon(sys_icon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.btn_sort.clicked.connect(self.sort_timeline)
+
         self.btn_retime = QPushButton("Recalculate Gaps")
         self.btn_retime.setIcon(sys_icon(QStyle.StandardPixmap.SP_BrowserReload))
         self.btn_retime.clicked.connect(self.recalculate_timeline)
@@ -245,10 +290,12 @@ class MacroEditorApp(QMainWindow):
         self.btn_save_as.setIcon(sys_icon(QStyle.StandardPixmap.SP_DriveFDIcon))
         self.btn_save_as.clicked.connect(self.save_file_as)
 
+        btn_layout.addWidget(self.btn_record_new)
         btn_layout.addWidget(self.btn_up)
         btn_layout.addWidget(self.btn_down)
         btn_layout.addWidget(self.btn_duplicate)
         btn_layout.addWidget(self.btn_delete)
+        btn_layout.addWidget(self.btn_sort)
         btn_layout.addWidget(self.btn_retime)
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_save)
@@ -259,6 +306,44 @@ class MacroEditorApp(QMainWindow):
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
+
+    # --- INTEGRATED LIVE RECORDER LOGIC ---
+    def start_live_recording(self):
+        if self.record_thread and self.record_thread.isRunning():
+            self.record_thread.stop()
+            return
+
+        self.btn_record_new.setText("Recording... (Press ESC to stop)")
+        self.btn_record_new.setEnabled(False)
+
+        self.record_thread = EditorRecordThread(record_mouse_moves=True)
+        self.record_thread.finished_signal.connect(self.on_live_recording_finished)
+        self.record_thread.start()
+
+    def on_live_recording_finished(self, new_events):
+        self.btn_record_new.setText("Record Action")
+        self.btn_record_new.setEnabled(True)
+        self.record_thread = None
+
+        if not new_events:
+            QMessageBox.information(self, "Recorder", "No events were recorded.")
+            return
+
+        # Calculate timeline offset so new events append smoothly after the last existing event
+        offset = 0.0
+        if self.events:
+            offset = round(self.events[-1].get("time", 0.0) + 0.500, 4)
+
+        for ev in new_events:
+            ev["time"] = round(ev.get("time", 0.0) + offset, 4)
+            self.events.append(ev)
+
+        self.sort_timeline_silent()
+        self.populate_table()
+        QMessageBox.information(
+            self, "Recorded Actions Appended",
+            f"Successfully recorded and appended {len(new_events)} actions to your timeline!"
+        )
 
     # --- FILE HANDLING ---
     def load_file(self):
@@ -274,6 +359,7 @@ class MacroEditorApp(QMainWindow):
                 self.events = json.load(f)
 
             if isinstance(self.events, list):
+                self.sort_timeline_silent()
                 self.populate_table()
             else:
                 QMessageBox.warning(self, "Format Error", "JSON root must be a list of action dicts.")
@@ -305,8 +391,8 @@ class MacroEditorApp(QMainWindow):
 
         for idx, ev in enumerate(self.events):
             e_type = str(ev.get("type", ""))
-            x_val = str(ev.get("x", ""))
-            y_val = str(ev.get("y", ""))
+            x_val = str(ev.get("x", "")) if "x" in ev else ""
+            y_val = str(ev.get("y", "")) if "y" in ev else ""
             kb_val = str(ev.get("key") or ev.get("button", ""))
 
             match_str = f"{e_type} {x_val} {y_val} {kb_val}".lower()
@@ -324,25 +410,25 @@ class MacroEditorApp(QMainWindow):
             time_item = QTableWidgetItem(formatted_time)
 
             type_item = QTableWidgetItem(e_type)
-            x_item = QTableWidgetItem(x_val if "x" in ev else "")
-            y_item = QTableWidgetItem(y_val if "y" in ev else "")
+            x_item = QTableWidgetItem(x_val)
+            y_item = QTableWidgetItem(y_val)
             kb_item = QTableWidgetItem(kb_val)
 
             state_val = ""
             if "pressed" in ev:
                 state_val = "DOWN" if ev["pressed"] else "UP"
             elif "dx" in ev or "dy" in ev:
-                state_val = f"dx={ev.get('dx')}, dy={ev.get('dy')}"
+                state_val = f"dx={ev.get('dx', 0)}, dy={ev.get('dy', 0)}"
 
             state_item = QTableWidgetItem(state_val)
 
-            bg_color = QColor("#181825")
+            bg_color = QColor("#020617")
             if e_type == "mouse_click":
-                bg_color = QColor("#1e3a29")
+                bg_color = QColor("#064e3b")
             elif e_type in ("key_press", "key_release"):
-                bg_color = QColor("#1e2a3a")
+                bg_color = QColor("#1e3a8a")
             elif e_type == "mouse_scroll":
-                bg_color = QColor("#3a2e1e")
+                bg_color = QColor("#78350f")
 
             for col_idx, item in enumerate([idx_item, time_item, type_item, x_item, y_item, kb_item, state_item]):
                 item.setBackground(bg_color)
@@ -366,9 +452,21 @@ class MacroEditorApp(QMainWindow):
 
         try:
             if col == 1:
-                ev["time"] = time_str_to_seconds(cell_text)
+                ev["time"] = max(0.0, round(time_str_to_seconds(cell_text), 4))
             elif col == 2:
-                ev["type"] = cell_text
+                new_type = cell_text.lower()
+                ev["type"] = new_type
+                if new_type == "mouse_click":
+                    ev.setdefault("x", 0)
+                    ev.setdefault("y", 0)
+                    ev.setdefault("button", "left")
+                    ev.setdefault("pressed", True)
+                elif new_type in ("key_press", "key_release"):
+                    ev.setdefault("key", "a")
+                    ev["pressed"] = (new_type == "key_press")
+                elif new_type == "mouse_move":
+                    ev.setdefault("x", 0)
+                    ev.setdefault("y", 0)
             elif col == 3 and cell_text:
                 ev["x"] = int(float(cell_text))
             elif col == 4 and cell_text:
@@ -377,9 +475,16 @@ class MacroEditorApp(QMainWindow):
                 if ev.get("type") in ("key_press", "key_release"):
                     ev["key"] = cell_text
                 elif ev.get("type") == "mouse_click":
-                    ev["button"] = cell_text
+                    ev["button"] = cell_text.lower()
+            elif col == 6:
+                txt_upper = cell_text.upper()
+                if txt_upper in ("DOWN", "PRESS", "TRUE", "1"):
+                    ev["pressed"] = True
+                elif txt_upper in ("UP", "RELEASE", "FALSE", "0"):
+                    ev["pressed"] = False
+
         except ValueError:
-            QMessageBox.warning(self, "Invalid Value", f"Invalid format '{cell_text}' for this column.")
+            QMessageBox.warning(self, "Invalid Value", f"Invalid format '{cell_text}' for this field.")
 
         self.populate_table()
 
@@ -410,9 +515,10 @@ class MacroEditorApp(QMainWindow):
 
         for idx in real_indexes:
             cloned_ev = dict(self.events[idx])
-            cloned_ev["time"] += 0.050
+            cloned_ev["time"] = round(cloned_ev.get("time", 0.0) + 0.050, 4)
             self.events.insert(idx + 1, cloned_ev)
 
+        self.sort_timeline_silent()
         self.populate_table()
 
     def move_event(self, direction):
@@ -425,7 +531,23 @@ class MacroEditorApp(QMainWindow):
 
         if 0 <= target_idx < len(self.events):
             self.events[idx], self.events[target_idx] = self.events[target_idx], self.events[idx]
+            
+            t_temp = self.events[idx].get("time", 0.0)
+            self.events[idx]["time"] = self.events[target_idx].get("time", 0.0)
+            self.events[target_idx]["time"] = t_temp
+
             self.populate_table()
+
+    def sort_timeline_silent(self):
+        if self.events:
+            self.events.sort(key=lambda e: e.get("time", 0.0))
+
+    def sort_timeline(self):
+        if not self.events:
+            return
+        self.sort_timeline_silent()
+        self.populate_table()
+        QMessageBox.information(self, "Sorted", "All macro events sorted chronologically by timestamp.")
 
     def recalculate_timeline(self):
         if not self.events:
@@ -433,10 +555,11 @@ class MacroEditorApp(QMainWindow):
 
         first_time = self.events[0].get("time", 0.0)
         for ev in self.events:
-            ev["time"] = max(0.0, round(ev.get("time", 0.0) - first_time, 3))
+            ev["time"] = max(0.0, round(ev.get("time", 0.0) - first_time, 4))
 
+        self.sort_timeline_silent()
         self.populate_table()
-        QMessageBox.information(self, "Timeline Reset", "Timestamps resynced to eliminate leading dead space.")
+        QMessageBox.information(self, "Timeline Reset", "Timestamps resynced starting from 00:00.000.")
 
     # --- SAVE OPERATIONS ---
     def save_file(self):
@@ -454,6 +577,7 @@ class MacroEditorApp(QMainWindow):
 
     def _write_to_disk(self, save_path):
         try:
+            self.sort_timeline_silent()
             with open(save_path, "w") as f:
                 json.dump(self.events, f, indent=2)
             QMessageBox.information(self, "Saved", f"Saved {len(self.events)} frame actions to:\n{save_path}")

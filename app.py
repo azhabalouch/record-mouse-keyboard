@@ -1,5 +1,5 @@
 """
-Task Easier — Windows Input Automation Suite
+Task Easier — Automation
 Built with PyQt6 using modern Win32 Native SendInput drivers.
 Supports batch macro queue loading and persistent JSON configuration.
 """
@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QCheckBox, QFileDialog, QSlider,
     QSpinBox, QDoubleSpinBox, QMessageBox, QGroupBox, QFrame, QListWidget,
-    QAbstractItemView
+    QAbstractItemView, QStyle
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 
@@ -35,7 +35,6 @@ DEFAULT_CONFIG = {
     "batch_queue": []
 }
 
-# Force Windows Per-Monitor V2 DPI Awareness BEFORE QApplication creation
 if sys.platform == "win32":
     try:
         ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
@@ -154,8 +153,8 @@ class PlayThread(QThread):
 class TaskEasierApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Task Easier")
-        self.setFixedSize(680, 720)
+        self.setWindowTitle("Task Easier Pro")
+        self.setFixedSize(760, 780)
 
         self.config = load_app_config()
 
@@ -164,11 +163,9 @@ class TaskEasierApp(QMainWindow):
         self.loaded_events = []
         self.recording_duration = 0.0
 
-        # Batch playback state
         self.batch_queue_files = []
         self.current_batch_index = 0
 
-        # Timers
         self.rec_timer = QTimer()
         self.rec_timer.setInterval(50)
         self.rec_timer.timeout.connect(self.update_rec_time)
@@ -218,15 +215,15 @@ class TaskEasierApp(QMainWindow):
 
     def init_ui(self):
         main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(18, 18, 18, 18)
-        main_layout.setSpacing(14)
+        main_layout.setContentsMargins(24, 24, 24, 24)
+        main_layout.setSpacing(16)
 
         # Header Bar
         header_layout = QHBoxLayout()
         title_lbl = QLabel("TASK EASIER")
         title_lbl.setObjectName("appTitle")
         
-        ver_lbl = QLabel("v2.0 PRO")
+        ver_lbl = QLabel("v1.0.0")
         ver_lbl.setObjectName("verBadge")
 
         header_layout.addWidget(title_lbl)
@@ -248,7 +245,7 @@ class TaskEasierApp(QMainWindow):
         # Tabs
         tabs = QTabWidget()
         tabs.addTab(self.create_recorder_tab(), "Macro Recorder")
-        tabs.addTab(self.create_player_tab(), "Macro Batch Player")
+        tabs.addTab(self.create_player_tab(), "Batch Player")
 
         main_layout.addWidget(tabs)
 
@@ -256,16 +253,17 @@ class TaskEasierApp(QMainWindow):
         container.setLayout(main_layout)
         self.setCentralWidget(container)
 
-    # --- TAB 1: RECORDER ---
     def create_recorder_tab(self):
+        sys_icon = self.style().standardIcon
+
         tab = QWidget()
         layout = QVBoxLayout()
-        layout.setContentsMargins(12, 16, 12, 12)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 20, 16, 16)
+        layout.setSpacing(16)
 
         file_box = QGroupBox("OUTPUT CONFIGURATION")
         fb_layout = QVBoxLayout()
-        fb_layout.setSpacing(8)
+        fb_layout.setSpacing(12)
 
         f_line = QHBoxLayout()
         f_line.addWidget(QLabel("Preset Name:"))
@@ -280,6 +278,7 @@ class TaskEasierApp(QMainWindow):
         self.path_input = QLineEdit(os.getcwd())
         self.path_input.setEnabled(False)
         self.browse_btn = QPushButton("Browse")
+        self.browse_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_DialogOpenButton))
         self.browse_btn.setEnabled(False)
         self.browse_btn.clicked.connect(self.browse_location)
 
@@ -293,7 +292,7 @@ class TaskEasierApp(QMainWindow):
 
         opts_box = QGroupBox("CAPTURE SETTINGS")
         opts_layout = QVBoxLayout()
-        opts_layout.setSpacing(8)
+        opts_layout.setSpacing(12)
 
         self.rec_moves_cb = QCheckBox("Track Mouse Pointer Movements")
         self.rec_moves_cb.setChecked(True)
@@ -313,7 +312,7 @@ class TaskEasierApp(QMainWindow):
         timer_card = QFrame()
         timer_card.setObjectName("timerCard")
         tc_layout = QVBoxLayout(timer_card)
-        tc_layout.setContentsMargins(10, 10, 10, 10)
+        tc_layout.setContentsMargins(16, 18, 16, 18)
 
         self.rec_time_lbl = QLabel("00:00.0")
         self.rec_time_lbl.setObjectName("timerDisplay")
@@ -329,8 +328,14 @@ class TaskEasierApp(QMainWindow):
         ctrl_layout = QHBoxLayout()
         self.rec_play_btn = QPushButton("Record")
         self.rec_play_btn.setObjectName("btnPrimary")
+        self.rec_play_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaPlay))
+
         self.rec_pause_btn = QPushButton("Pause")
+        self.rec_pause_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaPause))
+
         self.rec_stop_btn = QPushButton("Stop")
+        self.rec_stop_btn.setObjectName("btnDanger")
+        self.rec_stop_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaStop))
 
         self.rec_pause_btn.setEnabled(False)
         self.rec_stop_btn.setEnabled(False)
@@ -351,26 +356,34 @@ class TaskEasierApp(QMainWindow):
         tab.setLayout(layout)
         return tab
 
-    # --- TAB 2: PLAYER & BATCH QUEUE ---
     def create_player_tab(self):
+        sys_icon = self.style().standardIcon
+
         tab = QWidget()
         layout = QVBoxLayout()
-        layout.setContentsMargins(12, 16, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 20, 16, 16)
+        layout.setSpacing(14)
 
-        batch_box = QGroupBox("MACRO EXECUTION QUEUE (BATCH ENGINE)")
+        batch_box = QGroupBox("MACRO EXECUTION QUEUE")
         bb_layout = QVBoxLayout()
-        bb_layout.setSpacing(6)
+        bb_layout.setSpacing(10)
 
         self.queue_widget = QListWidget()
         self.queue_widget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.queue_widget.setFixedHeight(120)
+        self.queue_widget.setFixedHeight(130)
 
         btn_row = QHBoxLayout()
-        self.btn_add_files = QPushButton("Add JSON File(s)")
+        self.btn_add_files = QPushButton("Add Files")
+        self.btn_add_files.setIcon(sys_icon(QStyle.StandardPixmap.SP_DialogOpenButton))
+
         self.btn_add_folder = QPushButton("Add Folder")
-        self.btn_remove_file = QPushButton("Remove Selected")
-        self.btn_clear_queue = QPushButton("Clear Queue")
+        self.btn_add_folder.setIcon(sys_icon(QStyle.StandardPixmap.SP_DirIcon))
+
+        self.btn_remove_file = QPushButton("Remove")
+        self.btn_remove_file.setIcon(sys_icon(QStyle.StandardPixmap.SP_TrashIcon))
+
+        self.btn_clear_queue = QPushButton("Clear")
+        self.btn_clear_queue.setIcon(sys_icon(QStyle.StandardPixmap.SP_DialogResetButton))
 
         self.btn_add_files.clicked.connect(self.add_batch_files)
         self.btn_add_folder.clicked.connect(self.add_batch_folder)
@@ -388,7 +401,7 @@ class TaskEasierApp(QMainWindow):
 
         exec_box = QGroupBox("EXECUTION & TIMING CONTROLS")
         exec_layout = QVBoxLayout()
-        exec_layout.setSpacing(8)
+        exec_layout.setSpacing(12)
 
         h1 = QHBoxLayout()
         h1.addWidget(QLabel("Speed Scale:"))
@@ -435,9 +448,8 @@ class TaskEasierApp(QMainWindow):
         play_card = QFrame()
         play_card.setObjectName("timerCard")
         pc_layout = QVBoxLayout(play_card)
-        pc_layout.setContentsMargins(10, 10, 10, 10)
+        pc_layout.setContentsMargins(16, 18, 16, 18)
 
-        # Custom Clickable Seek Slider
         self.seek_slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setRange(0, 1000)
         self.seek_slider.setEnabled(False)
@@ -458,8 +470,14 @@ class TaskEasierApp(QMainWindow):
         ctrl_layout = QHBoxLayout()
         self.play_start_btn = QPushButton("Play")
         self.play_start_btn.setObjectName("btnPrimary")
+        self.play_start_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaPlay))
+
         self.play_pause_btn = QPushButton("Pause")
+        self.play_pause_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaPause))
+
         self.play_stop_btn = QPushButton("Stop")
+        self.play_stop_btn.setObjectName("btnDanger")
+        self.play_stop_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaStop))
 
         self.play_start_btn.setEnabled(False)
         self.play_pause_btn.setEnabled(False)
@@ -481,7 +499,6 @@ class TaskEasierApp(QMainWindow):
         tab.setLayout(layout)
         return tab
 
-    # --- CONFIGURATION PERSISTENCE ---
     def restore_config_to_ui(self):
         self.filename_input.setText(self.config.get("preset_name", "task_macro.json"))
         self.rec_moves_cb.setChecked(self.config.get("track_mouse_moves", True))
@@ -519,7 +536,6 @@ class TaskEasierApp(QMainWindow):
         self.config["batch_queue"] = self.batch_queue_files
         save_app_config(self.config)
 
-    # --- BATCH QUEUE MANAGEMENT ---
     def add_batch_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Select Macro JSON Files", "", "JSON Files (*.json)")
         for file_path in files:
@@ -561,7 +577,6 @@ class TaskEasierApp(QMainWindow):
         self.play_start_btn.setEnabled(False)
         self.save_current_ui_to_config()
 
-    # --- RECORDER LOGIC ---
     def toggle_dir_selection(self, checked):
         self.path_input.setEnabled(not checked)
         self.browse_btn.setEnabled(not checked)
@@ -582,7 +597,6 @@ class TaskEasierApp(QMainWindow):
                 self.rec_pause_btn.setEnabled(True)
             return
 
-        # Immediately reset the readout label when starting a new flow
         self.rec_time_lbl.setText("00:00.0")
 
         delay = self.rec_delay_spin.value()
@@ -609,7 +623,6 @@ class TaskEasierApp(QMainWindow):
             self.record_thread.quit()
             self.record_thread.wait(1000)
 
-        # Ensure timer label is reset to zero on execution launch
         self.rec_time_lbl.setText("00:00.0")
 
         self.record_thread = RecordThread(record_mouse_moves=self.rec_moves_cb.isChecked())
@@ -662,11 +675,39 @@ class TaskEasierApp(QMainWindow):
 
         save_path = os.path.join(self.path_input.text(), filename)
 
-        with open(save_path, "w") as f:
-            json.dump(events, f, indent=2)
+        if os.path.exists(save_path):
+            reply = QMessageBox.question(
+                self,
+                "Overwrite Existing File?",
+                f"The file '{filename}' already exists in:\n{self.path_input.text()}\n\nDo you want to overwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                new_path, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "Save Macro JSON As",
+                    save_path,
+                    "JSON Files (*.json)"
+                )
+                if new_path:
+                    save_path = new_path
+                else:
+                    self.rec_status_lbl.setText("Saving cancelled.")
+                    self.rec_play_btn.setEnabled(True)
+                    self.rec_pause_btn.setEnabled(False)
+                    self.rec_stop_btn.setEnabled(False)
+                    return
+
+        try:
+            with open(save_path, "w") as f:
+                json.dump(events, f, indent=2)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save file:\n{str(e)}")
+            return
 
         self.loaded_events = events
-        self.rec_status_lbl.setText(f"SAVED: {filename} ({len(events)} events)")
+        self.rec_status_lbl.setText(f"SAVED: {os.path.basename(save_path)} ({len(events)} events)")
         self.rec_play_btn.setEnabled(True)
         self.rec_pause_btn.setEnabled(False)
         self.rec_stop_btn.setEnabled(False)
@@ -679,7 +720,6 @@ class TaskEasierApp(QMainWindow):
 
         QMessageBox.information(self, "Recording Complete", f"Recorded {len(events)} actions to:\n{save_path}")
 
-    # --- BATCH PLAYER LOGIC ---
     def update_playback_time_label(self, current_sec):
         curr_m, curr_s = divmod(current_sec, 60)
         tot_m, tot_s = divmod(self.recording_duration, 60)
@@ -828,45 +868,311 @@ class TaskEasierApp(QMainWindow):
         self.update_playback_time_label(0.0)
         self.play_status_lbl.setText("BATCH QUEUE COMPLETED")
 
+    # --- MODERN STYLESHEET (9/10 UPGRADE) ---
     def apply_theme(self):
-        enterprise_qss = """
-        QMainWindow { background-color: #0f172a; }
-        QWidget { color: #f8fafc; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; }
-        #appTitle { font-size: 18px; font-weight: 800; color: #38bdf8; letter-spacing: 1px; }
-        #verBadge { background-color: #1e293b; color: #94a3b8; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; }
-        #adminActive { background-color: #064e3b; color: #34d399; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }
-        #adminWarning { background-color: #451a03; color: #fb923c; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+        qss = """
+        QMainWindow {
+            background-color: #0e0e0f;
+        }
+        QWidget {
+            color: #f1f5f9;
+            font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, sans-serif;
+            font-size: 13px;
+        }
+        #appTitle {
+            font-size: 20px;
+            font-weight: 800;
+            color: #38bdf8;
+            letter-spacing: 1.2px;
+        }
+        #verBadge {
+            background-color: #1e293b;
+            color: #94a3b8;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        #adminActive {
+            background-color: #064e3b;
+            color: #34d399;
+            padding: 5px 14px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        #adminWarning {
+            background-color: #451a03;
+            color: #fb923c;
+            padding: 5px 14px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+        }
 
-        QTabWidget::pane { border: 1px solid #1e293b; background-color: #0f172a; border-radius: 8px; }
-        QTabBar::tab { background-color: #1e293b; color: #94a3b8; padding: 10px 24px; margin-right: 4px; border-top-left-radius: 6px; border-top-right-radius: 6px; font-weight: 600; }
-        QTabBar::tab:selected { background-color: #0284c7; color: #ffffff; }
+        QTabWidget::pane {
+            border: 1px solid #1e293b;
+            background-color: #0e0e0f;
+            border-radius: 10px;
+        }
+        QTabBar::tab {
+            background-color: #18191c;
+            color: #94a3b8;
+            padding: 11px 26px;
+            margin-right: 6px;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            font-weight: 700;
+        }
+        QTabBar::tab:selected {
+            background-color: #0284c7;
+            color: #ffffff;
+        }
 
-        QGroupBox { border: 1px solid #1e293b; background-color: #1e293b; border-radius: 8px; margin-top: 12px; padding-top: 14px; font-weight: 700; font-size: 11px; color: #0284c7; letter-spacing: 0.5px; }
-        QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; }
+        QGroupBox {
+            border: 1px solid #2a2b30;
+            background-color: #18191c;
+            border-radius: 10px;
+            margin-top: 14px;
+            padding-top: 18px;
+            font-weight: 800;
+            font-size: 11px;
+            color: #38bdf8;
+            letter-spacing: 0.8px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 14px;
+            padding: 0 8px;
+        }
 
-        QListWidget { background-color: #020617; border: 1px solid #334155; border-radius: 6px; padding: 4px; color: #38bdf8; }
-        QListWidget::item:selected { background-color: #0284c7; color: #ffffff; border-radius: 4px; }
+        QListWidget {
+            background-color: #0a0a0c;
+            border: 1px solid #2a2b30;
+            border-radius: 8px;
+            padding: 8px;
+            color: #38bdf8;
+        }
+        QListWidget::item {
+            padding: 6px;
+            border-radius: 4px;
+        }
+        QListWidget::item:selected {
+            background-color: #0284c7;
+            color: #ffffff;
+        }
 
-        #timerCard { background-color: #020617; border: 1px solid #1e293b; border-radius: 8px; }
-        #timerDisplay { font-size: 30px; font-weight: 800; color: #38bdf8; font-family: 'Consolas', monospace; }
-        #statusLabel { font-size: 11px; font-weight: 600; color: #64748b; letter-spacing: 0.5px; }
+        #timerCard {
+            background-color: #0a0a0c;
+            border: 1px solid #2a2b30;
+            border-radius: 10px;
+        }
+        #timerDisplay {
+            font-size: 34px;
+            font-weight: 800;
+            color: #38bdf8;
+            font-family: 'Consolas', 'Courier New', monospace;
+        }
+        #statusLabel {
+            font-size: 11px;
+            font-weight: 600;
+            color: #64748b;
+            letter-spacing: 0.5px;
+        }
 
-        QLineEdit, QSpinBox, QDoubleSpinBox { background-color: #020617; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; color: #f8fafc; }
-        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #38bdf8; }
-        QCheckBox { spacing: 8px; color: #cbd5e1; }
+        QLineEdit {
+            background-color: #0a0a0c;
+            border: 1px solid #2a2b30;
+            border-radius: 8px;
+            padding: 7px 12px;
+            color: #f8fafc;
+        }
+        QLineEdit:focus {
+            border-color: #38bdf8;
+        }
+
+        /* ============================================================================
+        SPINBOX & DOUBLE SPINBOX - MODERN INTEGRATED CONTROL TRACK
+        ============================================================================ */
+
+        QSpinBox, QDoubleSpinBox {
+            background-color: #0b0f19;
+            border: 1px solid #1e293b;
+            border-radius: 8px;
+            padding: 6px 32px 6px 14px;
+            color: #f8fafc;
+            font-weight: 600;
+            min-height: 28px;
+            selection-background-color: #0284c7;
+            selection-color: #ffffff;
+        }
+
+        QSpinBox:focus, QDoubleSpinBox:focus {
+            border-color: #38bdf8;
+            background-color: #0f172a;
+        }
+
+        QSpinBox:disabled, QDoubleSpinBox:disabled {
+            background-color: #090d16;
+            border-color: #1e293b;
+            color: #475569;
+        }
+
+        /* --- UP BUTTON & CONTAINER --- */
+        QSpinBox::up-button, QDoubleSpinBox::up-button {
+            subcontrol-origin: border;
+            subcontrol-position: top right;
+            width: 22px;
+            height: 14px;
+            border-left: 1px solid #1e293b;
+            border-bottom: 1px solid #1e293b;
+            border-top-right-radius: 7px;
+            background-color: #151d30;
+            margin-top: 1px;
+            margin-right: 1px;
+        }
+
+        QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover {
+            background-color: #334155;
+            border-color: #334155;
+        }
+
+        QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed {
+            background-color: #0284c7;
+            border-color: #0284c7;
+        }
+
+        /* --- UP ARROW VECTOR --- */
+        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+            width: 0px;
+            height: 0px;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-bottom: 5px solid #38bdf8;
+            margin: 0px;
+        }
+
+        QSpinBox::up-button:pressed QSpinBox::up-arrow,
+        QDoubleSpinBox::up-button:pressed QDoubleSpinBox::up-arrow {
+            border-bottom-color: #ffffff;
+        }
+
+        QSpinBox::up-arrow:disabled, QSpinBox::up-arrow:off,
+        QDoubleSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:off {
+            border-bottom-color: #334155;
+        }
+
+        /* --- DOWN BUTTON & CONTAINER --- */
+        QSpinBox::down-button, QDoubleSpinBox::down-button {
+            subcontrol-origin: border;
+            subcontrol-position: bottom right;
+            width: 22px;
+            height: 14px;
+            border-left: 1px solid #1e293b;
+            border-bottom-right-radius: 7px;
+            background-color: #151d30;
+            margin-bottom: 1px;
+            margin-right: 1px;
+        }
+
+        QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+            background-color: #334155;
+            border-color: #334155;
+        }
+
+        QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+            background-color: #0284c7;
+            border-color: #0284c7;
+        }
+
+        /* --- DOWN ARROW VECTOR --- */
+        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+            width: 0px;
+            height: 0px;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid #38bdf8;
+            margin: 0px;
+        }
+
+        QSpinBox::down-button:pressed QSpinBox::down-arrow,
+        QDoubleSpinBox::down-button:pressed QDoubleSpinBox::down-arrow {
+            border-top-color: #ffffff;
+        }
+
+        QSpinBox::down-arrow:disabled, QSpinBox::down-arrow:off,
+        QDoubleSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:off {
+            border-top-color: #334155;
+        }
+
+        QCheckBox {
+            spacing: 10px;
+            color: #cbd5e1;
+        }
         
-        QPushButton { background-color: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 7px 14px; color: #f8fafc; font-weight: 700; }
-        QPushButton:hover { background-color: #334155; border-color: #475569; }
-        QPushButton:disabled { background-color: #0f172a; color: #475569; border-color: #1e293b; }
-        #btnPrimary { background-color: #0284c7; border: none; }
-        #btnPrimary:hover { background-color: #0369a1; }
-        #btnPrimary:disabled { background-color: #0f172a; color: #475569; }
+        QPushButton {
+            background-color: #18191c;
+            border: 1px solid #2a2b30;
+            border-radius: 8px;
+            padding: 8px 16px;
+            color: #f8fafc;
+            font-weight: 700;
+        }
+        QPushButton:hover {
+            background-color: #2a2b30;
+            border-color: #475569;
+        }
+        QPushButton:disabled {
+            background-color: #0e0e0f;
+            color: #475569;
+            border-color: #1e293b;
+        }
+        #btnPrimary {
+            background-color: #0284c7;
+            border: none;
+            color: #ffffff;
+        }
+        #btnPrimary:hover {
+            background-color: #0369a1;
+        }
+        #btnPrimary:disabled {
+            background-color: #0e0e0f;
+            color: #475569;
+        }
+        #btnDanger {
+            background-color: #991b1b;
+            border: none;
+            color: #ffffff;
+        }
+        #btnDanger:hover {
+            background-color: #dc2626;
+        }
+        #btnDanger:disabled {
+            background-color: #0e0e0f;
+            color: #475569;
+        }
 
-        QSlider::groove:horizontal { border: none; height: 6px; background: #1e293b; border-radius: 3px; }
-        QSlider::sub-page:horizontal { background: #0284c7; border-radius: 3px; }
-        QSlider::handle:horizontal { background: #38bdf8; border: none; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px; }
+        QSlider::groove:horizontal {
+            border: none;
+            height: 6px;
+            background: #18191c;
+            border-radius: 3px;
+        }
+        QSlider::sub-page:horizontal {
+            background: #0284c7;
+            border-radius: 3px;
+        }
+        QSlider::handle:horizontal {
+            background: #38bdf8;
+            border: none;
+            width: 16px;
+            height: 16px;
+            margin: -5px 0;
+            border-radius: 8px;
+        }
         """
-        self.setStyleSheet(enterprise_qss)
+        self.setStyleSheet(qss)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,5 @@
 """
-input-editor.py
----------------
-Task Easier — Macro Timeline Studio with Integrated Live Recorder
+Task Easier — Macro Timeline Studio with Integrated Live Recorder & Bulk Time Adjuster
 """
 
 import sys
@@ -11,10 +9,11 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView, QMessageBox,
-    QGroupBox, QStyle
+    QGroupBox, QStyle, QDialog, QFormLayout, QDoubleSpinBox,
+    QDialogButtonBox, QMenu
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QAction
 
 # Import the Recorder module
 from recorder import Recorder
@@ -25,7 +24,7 @@ from recorder import Recorder
 # ==========================================
 def seconds_to_time_str(seconds: float) -> str:
     """Converts seconds (e.g. 94.5) to MM:SS.ms format (e.g. 01:34.500)."""
-    mins, secs = divmod(seconds, 60)
+    mins, secs = divmod(max(0.0, seconds), 60)
     return f"{int(mins):02d}:{secs:06.3f}"
 
 
@@ -36,6 +35,63 @@ def time_str_to_seconds(time_str: str) -> float:
         parts = time_str.split(":")
         return float(parts[0]) * 60.0 + float(parts[1])
     return float(time_str)
+
+
+# ==========================================
+# BULK TIME ADJUSTMENT DIALOG
+# ==========================================
+class TimeAdjustDialog(QDialog):
+    def __init__(self, initial_time: float, count: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Adjust Time of Actions")
+        self.resize(380, 200)
+
+        layout = QVBoxLayout(self)
+        form_layout = QFormLayout()
+
+        info_lbl = QLabel(f"Modifying timing for <b>{count}</b> selected action(s).")
+        info_lbl.setWordWrap(True)
+        layout.addWidget(info_lbl)
+
+        self.time_input = QLineEdit(seconds_to_time_str(initial_time))
+        self.time_input.setPlaceholderText("e.g. 07:05.000 or 425.0")
+        form_layout.addRow("New Start Time (MM:SS.ms or Secs):", self.time_input)
+
+        self.stagger_spin = QDoubleSpinBox()
+        self.stagger_spin.setRange(0.0, 600.0)
+        self.stagger_spin.setSingleStep(0.05)
+        self.stagger_spin.setDecimals(3)
+        self.stagger_spin.setValue(0.100)
+        self.stagger_spin.setSuffix(" s")
+        form_layout.addRow("Stagger Interval Between Actions:", self.stagger_spin)
+
+        layout.addLayout(form_layout)
+
+        # Standard Dialog Buttons
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.buttons.accepted.connect(self.validate_and_accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+        self.target_start_time = initial_time
+        self.stagger_interval = 0.100
+
+    def validate_and_accept(self):
+        raw_txt = self.time_input.text().strip()
+        try:
+            val = time_str_to_seconds(raw_txt)
+            if val < 0:
+                raise ValueError("Time cannot be negative.")
+            self.target_start_time = round(val, 4)
+            self.stagger_interval = round(self.stagger_spin.value(), 4)
+            self.accept()
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Invalid Time Format",
+                f"Could not parse '{raw_txt}' into a valid timestamp.\nError: {str(e)}"
+            )
 
 
 # ==========================================
@@ -122,14 +178,14 @@ QPushButton#dangerBtn {
 QPushButton#dangerBtn:hover {
     background-color: #dc2626;
 }
-QLineEdit {
+QLineEdit, QSpinBox, QDoubleSpinBox {
     background-color: #020617;
     border: 1px solid #334155;
     border-radius: 6px;
     color: #f8fafc;
     padding: 5px 8px;
 }
-QLineEdit:focus {
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     border-color: #38bdf8;
 }
 QTableWidget {
@@ -157,6 +213,15 @@ QLabel#statBox {
     padding: 6px 12px;
     font-weight: bold;
 }
+QMenu {
+    background-color: #1e293b;
+    border: 1px solid #334155;
+    color: #f8fafc;
+}
+QMenu::item:selected {
+    background-color: #0284c7;
+    color: #ffffff;
+}
 """
 
 
@@ -167,7 +232,7 @@ class MacroEditorApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Task Easier — Macro Timeline Studio")
-        self.resize(900, 620)
+        self.resize(950, 620)
         self.setStyleSheet(DARK_STYLESHEET)
 
         self.file_path = ""
@@ -244,6 +309,8 @@ class MacroEditorApp(QMainWindow):
 
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_table_context_menu)
         self.table.cellChanged.connect(self.on_cell_edited)
 
         main_layout.addWidget(self.table)
@@ -255,6 +322,10 @@ class MacroEditorApp(QMainWindow):
         self.btn_record_new.setObjectName("recordBtn")
         self.btn_record_new.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaPlay))
         self.btn_record_new.clicked.connect(self.start_live_recording)
+
+        self.btn_adjust_time = QPushButton("Adjust Time...")
+        self.btn_adjust_time.setIcon(sys_icon(QStyle.StandardPixmap.SP_FileDialogInfoView))
+        self.btn_adjust_time.clicked.connect(self.open_time_adjust_dialog)
 
         self.btn_up = QPushButton("Move Up")
         self.btn_up.setIcon(sys_icon(QStyle.StandardPixmap.SP_ArrowUp))
@@ -291,6 +362,7 @@ class MacroEditorApp(QMainWindow):
         self.btn_save_as.clicked.connect(self.save_file_as)
 
         btn_layout.addWidget(self.btn_record_new)
+        btn_layout.addWidget(self.btn_adjust_time)
         btn_layout.addWidget(self.btn_up)
         btn_layout.addWidget(self.btn_down)
         btn_layout.addWidget(self.btn_duplicate)
@@ -306,6 +378,76 @@ class MacroEditorApp(QMainWindow):
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
+
+    # --- CONTEXT MENU & TIME ADJUSTMENT LOGIC ---
+    def show_table_context_menu(self, pos):
+        real_indexes = self.get_selected_real_indexes()
+        if not real_indexes:
+            return
+
+        menu = QMenu(self)
+        adjust_action = QAction(f"Adjust Time of Selected ({len(real_indexes)} actions)...", self)
+        adjust_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogInfoView))
+        adjust_action.triggered.connect(self.open_time_adjust_dialog)
+        menu.addAction(adjust_action)
+
+        delete_action = QAction("Delete Selected", self)
+        delete_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+        delete_action.triggered.connect(self.delete_selected_rows)
+        menu.addAction(delete_action)
+
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def open_time_adjust_dialog(self):
+        real_indexes = self.get_selected_real_indexes()
+        if not real_indexes:
+            QMessageBox.information(self, "Selection Required", "Please select one or more actions to adjust their timing.")
+            return
+
+        initial_time = self.events[real_indexes[0]].get("time", 0.0)
+        dialog = TimeAdjustDialog(initial_time=initial_time, count=len(real_indexes), parent=self)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_start_time = dialog.target_start_time
+            stagger = dialog.stagger_interval
+
+            # Generate target timestamps for selected actions
+            target_times = [round(new_start_time + (i * stagger), 4) for i in range(len(real_indexes))]
+
+            # Check for collisions with UNSELECTED actions
+            unselected_times = {
+                round(ev.get("time", 0.0), 4)
+                for idx, ev in enumerate(self.events)
+                if idx not in real_indexes
+            }
+
+            collisions = set(target_times).intersection(unselected_times)
+
+            if collisions:
+                coll_str = ", ".join(seconds_to_time_str(t) for t in sorted(list(collisions))[:5])
+                res = QMessageBox.warning(
+                    self,
+                    "Timestamp Collision Warning",
+                    f"Warning: {len(collisions)} target timestamp(s) collide with existing actions on the timeline!\n\n"
+                    f"Colliding Times: {coll_str}...\n\n"
+                    f"Do you still want to apply these timestamps and re-sort?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if res != QMessageBox.StandardButton.Yes:
+                    return
+
+            # Apply updated timestamps to selected events
+            for i, real_idx in enumerate(real_indexes):
+                self.events[real_idx]["time"] = target_times[i]
+
+            self.sort_timeline_silent()
+            self.populate_table()
+            QMessageBox.information(
+                self,
+                "Time Shift Applied",
+                f"Successfully updated timestamp(s) for {len(real_indexes)} action(s) starting from {seconds_to_time_str(new_start_time)}."
+            )
 
     # --- INTEGRATED LIVE RECORDER LOGIC ---
     def start_live_recording(self):
@@ -329,7 +471,6 @@ class MacroEditorApp(QMainWindow):
             QMessageBox.information(self, "Recorder", "No events were recorded.")
             return
 
-        # Calculate timeline offset so new events append smoothly after the last existing event
         offset = 0.0
         if self.events:
             offset = round(self.events[-1].get("time", 0.0) + 0.500, 4)
@@ -531,7 +672,7 @@ class MacroEditorApp(QMainWindow):
 
         if 0 <= target_idx < len(self.events):
             self.events[idx], self.events[target_idx] = self.events[target_idx], self.events[idx]
-            
+
             t_temp = self.events[idx].get("time", 0.0)
             self.events[idx]["time"] = self.events[target_idx].get("time", 0.0)
             self.events[target_idx]["time"] = t_temp

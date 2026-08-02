@@ -9,7 +9,7 @@ import random
 import time
 from pynput import keyboard, mouse
 
-def add_random_delay_after_clicks(events, min_delay=2.0, max_delay=5.0):
+def add_random_delay_after_clicks(events, min_delay=1.0, max_delay=2.0):
     if not events:
         return events
 
@@ -30,7 +30,7 @@ def add_random_delay_after_clicks(events, min_delay=2.0, max_delay=5.0):
 class Recorder:
     def __init__(self, move_throttle=0.01, move_min_distance=2,
                  record_mouse_moves=True, random_click_delay=False,
-                 click_delay_range=(2.0, 5.0)):
+                 click_delay_range=(1.0, 2.0)):
         self.events = []
         self.start_time = 0.0
         self.pause_offset = 0.0

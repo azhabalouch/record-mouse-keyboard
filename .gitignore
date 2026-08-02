@@ -1,4 +1,4 @@
 /venv
 /recordings-private
 /__pycache__
-config.json
+config-settings.json

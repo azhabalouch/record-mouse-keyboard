@@ -19,7 +19,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from recorder import Recorder
 from player import Player
 
-CONFIG_FILE = "config.json"
+CONFIG_FILE = "config-settings.json"
 
 DEFAULT_CONFIG = {
     "preset_name": "task_macro.json",

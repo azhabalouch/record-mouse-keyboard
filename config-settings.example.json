@@ -1,0 +1,14 @@
+{
+    "preset_name": "name-file.json",
+    "track_mouse_moves": true,
+    "rec_start_delay": 6,
+    "speed_scale": 1.0,
+    "loop_count": 1,
+    "play_start_delay": 6,
+    "enable_random_delay": true,
+    "rnd_min_delay": 2.0,
+    "rnd_max_delay": 3.0,
+    "last_directory": "C:\\Users\\Username\\Documents",
+    "batch_queue": [
+    ]
+}

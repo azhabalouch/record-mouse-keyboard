@@ -201,15 +201,27 @@ class TaskEasierApp(QMainWindow):
             self.play_delay_timer.stop()
         self.rec_timer.stop()
 
-        if self._is_thread_running(self.record_thread):
-            self.record_thread.stop()
-            self.record_thread.quit()
-            self.record_thread.wait(1000)
+        if self.record_thread is not None:
+            try:
+                self.record_thread.finished_signal.disconnect(self.on_recording_finished)
+            except TypeError:
+                pass
+            if self._is_thread_running(self.record_thread):
+                self.record_thread.stop()
+                self.record_thread.quit()
+                self.record_thread.wait(1000)
 
-        if self._is_thread_running(self.play_thread):
-            self.play_thread.stop()
-            self.play_thread.quit()
-            self.play_thread.wait(1000)
+        if self.play_thread is not None:
+            try:
+                self.play_thread.finished_signal.disconnect(self.on_single_playback_finished)
+                self.play_thread.progress_signal.disconnect(self.on_playback_progress)
+                self.play_thread.pause_state_signal.disconnect(self.on_playback_pause_state_changed)
+            except TypeError:
+                pass
+            if self._is_thread_running(self.play_thread):
+                self.play_thread.stop()
+                self.play_thread.quit()
+                self.play_thread.wait(1000)
 
         event.accept()
 
@@ -638,7 +650,8 @@ class TaskEasierApp(QMainWindow):
         self.rec_stop_btn.setEnabled(True)
 
     def _cleanup_record_thread(self):
-        self.record_thread = None
+        if self.sender() is self.record_thread:
+            self.record_thread = None
 
     def pause_recording(self):
         if self._is_thread_running(self.record_thread):
@@ -777,18 +790,35 @@ class TaskEasierApp(QMainWindow):
 
             self.recording_duration = self.loaded_events[-1]["time"]
             self.seek_slider.setEnabled(True)
+            self.seek_slider.blockSignals(True)
+            self.seek_slider.setValue(0)
+            self.seek_slider.blockSignals(False)
             self.update_playback_time_label(0.0)
 
             self.execute_start_playback()
         except Exception as e:
-            QMessageBox.critical(self, "Playback Error", f"Failed playing {file_path}:\n{str(e)}")
-            self.stop_playback()
+            QMessageBox.critical(
+                self, "Playback Error",
+                f"Failed playing {file_path}:\n{str(e)}\n\nSkipping to next item in queue."
+            )
+            self._cleanup_play_thread()
+            self.current_batch_index += 1
+            self.play_next_batch_item()
 
     def execute_start_playback(self):
-        if self._is_thread_running(self.play_thread):
-            self.play_thread.stop()
-            self.play_thread.quit()
-            self.play_thread.wait(1000)
+        old_thread = self.play_thread
+        if old_thread is not None:
+            try:
+                old_thread.progress_signal.disconnect(self.on_playback_progress)
+                old_thread.finished_signal.disconnect(self.on_single_playback_finished)
+                old_thread.pause_state_signal.disconnect(self.on_playback_pause_state_changed)
+            except TypeError:
+                pass
+            if self._is_thread_running(old_thread):
+                old_thread.stop()
+                old_thread.quit()
+                old_thread.wait(1000)
+            old_thread.deleteLater()
 
         self.play_thread = PlayThread(
             self.loaded_events,
@@ -801,8 +831,6 @@ class TaskEasierApp(QMainWindow):
         self.play_thread.progress_signal.connect(self.on_playback_progress)
         self.play_thread.finished_signal.connect(self.on_single_playback_finished)
         self.play_thread.pause_state_signal.connect(self.on_playback_pause_state_changed)
-        self.play_thread.finished.connect(self._cleanup_play_thread)
-        self.play_thread.finished.connect(self.play_thread.deleteLater)
 
         initial_seek_time = (self.seek_slider.value() / 1000.0) * self.recording_duration
         if initial_seek_time > 0:
@@ -816,13 +844,30 @@ class TaskEasierApp(QMainWindow):
         self.play_pause_btn.setEnabled(True)
         self.play_stop_btn.setEnabled(True)
 
-    def _cleanup_play_thread(self):
-        self.play_thread = None
-
     def pause_playback(self):
         if self._is_thread_running(self.play_thread):
             self.play_thread.pause()
             self.play_status_lbl.setText("PLAYBACK PAUSED")
+
+    def _cleanup_play_thread(self):
+        """Tear down the current play thread without deciding what happens to the batch.
+        Used both when the user hits Stop (whole batch aborts) and when a single
+        queued item errors out (batch should continue to the next item)."""
+        if self.play_thread is not None:
+            try:
+                self.play_thread.finished_signal.disconnect(self.on_single_playback_finished)
+                self.play_thread.progress_signal.disconnect(self.on_playback_progress)
+                self.play_thread.pause_state_signal.disconnect(self.on_playback_pause_state_changed)
+            except TypeError:
+                pass
+
+            if self._is_thread_running(self.play_thread):
+                self.play_thread.stop()
+                self.play_thread.quit()
+                self.play_thread.wait(1000)
+
+            self.play_thread.deleteLater()
+            self.play_thread = None
 
     def stop_playback(self):
         if self.play_delay_timer.isActive():
@@ -832,11 +877,7 @@ class TaskEasierApp(QMainWindow):
             self.play_status_lbl.setText("Playback cancelled.")
             return
 
-        if self._is_thread_running(self.play_thread):
-            self.play_thread.stop()
-            self.play_thread.quit()
-            self.play_thread.wait(1000)
-        
+        self._cleanup_play_thread()
         self.on_all_batch_finished()
 
     def user_seek(self, value):

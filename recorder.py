@@ -27,11 +27,60 @@ def add_random_delay_after_clicks(events, min_delay=1.0, max_delay=2.0):
     return adjusted
 
 
+def normalize_key_name(text):
+    """
+    Convert a user-typed key name (e.g. "esc", "Shift", "a", "Key.tab")
+    into the canonical string form produced by Recorder._key_to_str,
+    so it can be matched against recorded/incoming keys.
+
+    Returns None if the text doesn't look like a single character or a
+    recognized special key name.
+    """
+    text = text.strip()
+    if not text:
+        return None
+
+    # Single printable character - stored as-is (lowercase for consistency).
+    if len(text) == 1:
+        return text.lower()
+
+    lower = text.lower()
+    name = lower[4:] if lower.startswith("key.") else lower
+
+    if hasattr(keyboard.Key, name):
+        return f"Key.{name}"
+
+    return None
+
+
+_MODIFIER_ALIASES = {
+    "Key.shift": ("Key.shift", "Key.shift_l", "Key.shift_r"),
+    "Key.ctrl": ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
+    "Key.alt": ("Key.alt", "Key.alt_l", "Key.alt_r", "Key.alt_gr"),
+    "Key.cmd": ("Key.cmd", "Key.cmd_l", "Key.cmd_r"),
+}
+
+
+def expand_key_variants(key_str):
+    """Expand a canonical key string into every concrete form that could
+    actually be reported for it (see _MODIFIER_ALIASES)."""
+    return _MODIFIER_ALIASES.get(key_str, (key_str,))
+
+
 class Recorder:
     def __init__(self, move_throttle=0.01, move_min_distance=2,
                  record_mouse_moves=True, random_click_delay=False,
-                 click_delay_range=(1.0, 2.0)):
+                 click_delay_range=(1.0, 2.0), excluded_keys=None):
         self.events = []
+        # Normalized set of key strings (as produced by _key_to_str) that
+        # should never be written to the recorded event list. The key is
+        # still processed normally (e.g. ESC still stops recording) - it's
+        # just not logged. Generic modifier names are expanded to their
+        # concrete left/right forms so restricting "shift" (etc.) actually
+        # matches the real keypress events pynput reports.
+        self.excluded_keys = set()
+        for key_str in (excluded_keys or []):
+            self.excluded_keys.update(expand_key_variants(key_str))
         self.start_time = 0.0
         self.pause_offset = 0.0
         self.pause_start = 0.0
@@ -118,20 +167,26 @@ class Recorder:
             self.is_running = False
             return False
         if self.is_running and not self.is_paused:
+            key_str = self._key_to_str(key)
+            if key_str in self.excluded_keys:
+                return
             self.events.append({
                 "type": "key_press",
                 "time": round(self.get_elapsed_time(), 4),
-                "key": self._key_to_str(key),
+                "key": key_str,
             })
 
     def _on_release(self, key):
         if key == keyboard.Key.esc:
             return False
         if self.is_running and not self.is_paused:
+            key_str = self._key_to_str(key)
+            if key_str in self.excluded_keys:
+                return
             self.events.append({
                 "type": "key_release",
                 "time": round(self.get_elapsed_time(), 4),
-                "key": self._key_to_str(key),
+                "key": key_str,
             })
 
     def start(self):

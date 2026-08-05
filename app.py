@@ -12,11 +12,11 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QCheckBox, QFileDialog, QSlider,
     QSpinBox, QDoubleSpinBox, QMessageBox, QGroupBox, QFrame, QListWidget,
-    QAbstractItemView, QStyle
+    QAbstractItemView, QStyle, QScrollArea
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 
-from recorder import Recorder
+from recorder import Recorder, normalize_key_name
 from player import Player
 
 CONFIG_FILE = "config-settings.json"
@@ -32,7 +32,8 @@ DEFAULT_CONFIG = {
     "rnd_min_delay": 0.1,
     "rnd_max_delay": 0.5,
     "last_directory": os.getcwd(),
-    "batch_queue": []
+    "batch_queue": [],
+    "restricted_keys": []
 }
 
 if sys.platform == "win32":
@@ -85,9 +86,13 @@ class ClickableSlider(QSlider):
 class RecordThread(QThread):
     finished_signal = pyqtSignal(list)
 
-    def __init__(self, record_mouse_moves=True):
+    def __init__(self, record_mouse_moves=True, excluded_keys=None):
         super().__init__()
-        self.recorder = Recorder(record_mouse_moves=record_mouse_moves, random_click_delay=False)
+        self.recorder = Recorder(
+            record_mouse_moves=record_mouse_moves,
+            random_click_delay=False,
+            excluded_keys=excluded_keys,
+        )
 
     def run(self):
         self.recorder.start()
@@ -154,7 +159,8 @@ class TaskEasierApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Task Easier Pro")
-        self.setFixedSize(760, 780)
+        self.setMinimumSize(760, 640)
+        self.resize(760, 860)
 
         self.config = load_app_config()
 
@@ -321,6 +327,42 @@ class TaskEasierApp(QMainWindow):
         opts_layout.addLayout(delay_layout)
         opts_box.setLayout(opts_layout)
 
+        restrict_box = QGroupBox("KEY RESTRICTIONS")
+        restrict_layout = QVBoxLayout()
+        restrict_layout.setSpacing(10)
+
+        restrict_hint = QLabel("Keys added here will still work normally but won't be recorded into the macro.")
+        restrict_hint.setWordWrap(True)
+        restrict_hint.setObjectName("statusLabel")
+        restrict_layout.addWidget(restrict_hint)
+
+        restrict_input_row = QHBoxLayout()
+        self.restrict_key_input = QLineEdit()
+        self.restrict_key_input.setPlaceholderText("e.g. esc, shift, a, ctrl_l, tab")
+        self.restrict_key_input.returnPressed.connect(self.add_restricted_key)
+        self.restrict_add_btn = QPushButton("Add")
+        self.restrict_add_btn.clicked.connect(self.add_restricted_key)
+        restrict_input_row.addWidget(self.restrict_key_input)
+        restrict_input_row.addWidget(self.restrict_add_btn)
+        restrict_layout.addLayout(restrict_input_row)
+
+        self.restricted_keys_widget = QListWidget()
+        self.restricted_keys_widget.setFixedHeight(90)
+        restrict_layout.addWidget(self.restricted_keys_widget)
+
+        restrict_btn_row = QHBoxLayout()
+        self.restrict_remove_btn = QPushButton("Remove Selected")
+        self.restrict_remove_btn.clicked.connect(self.remove_restricted_key)
+        self.restrict_clear_btn = QPushButton("Clear All")
+        self.restrict_clear_btn.clicked.connect(self.clear_restricted_keys)
+        restrict_btn_row.addWidget(self.restrict_remove_btn)
+        restrict_btn_row.addWidget(self.restrict_clear_btn)
+        restrict_layout.addLayout(restrict_btn_row)
+
+        restrict_box.setLayout(restrict_layout)
+
+        self.restricted_keys = []
+
         timer_card = QFrame()
         timer_card.setObjectName("timerCard")
         tc_layout = QVBoxLayout(timer_card)
@@ -362,11 +404,17 @@ class TaskEasierApp(QMainWindow):
 
         layout.addWidget(file_box)
         layout.addWidget(opts_box)
+        layout.addWidget(restrict_box)
         layout.addWidget(timer_card)
         layout.addLayout(ctrl_layout)
 
         tab.setLayout(layout)
-        return tab
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(tab)
+        return scroll
 
     def create_player_tab(self):
         sys_icon = self.style().standardIcon
@@ -509,7 +557,12 @@ class TaskEasierApp(QMainWindow):
         layout.addLayout(ctrl_layout)
 
         tab.setLayout(layout)
-        return tab
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(tab)
+        return scroll
 
     def restore_config_to_ui(self):
         self.filename_input.setText(self.config.get("preset_name", "task_macro.json"))
@@ -523,6 +576,11 @@ class TaskEasierApp(QMainWindow):
         self.rnd_delay_cb.setChecked(self.config.get("enable_random_delay", False))
         self.rnd_min_spin.setValue(self.config.get("rnd_min_delay", 0.1))
         self.rnd_max_spin.setValue(self.config.get("rnd_max_delay", 0.5))
+
+        for key_name in self.config.get("restricted_keys", []):
+            if key_name not in self.restricted_keys:
+                self.restricted_keys.append(key_name)
+                self.restricted_keys_widget.addItem(key_name)
 
         for file_path in self.config.get("batch_queue", []):
             if os.path.exists(file_path):
@@ -546,6 +604,7 @@ class TaskEasierApp(QMainWindow):
         self.config["rnd_max_delay"] = self.rnd_max_spin.value()
 
         self.config["batch_queue"] = self.batch_queue_files
+        self.config["restricted_keys"] = self.restricted_keys
         save_app_config(self.config)
 
     def add_batch_files(self):
@@ -600,6 +659,41 @@ class TaskEasierApp(QMainWindow):
         if folder:
             self.path_input.setText(folder)
 
+    def add_restricted_key(self):
+        raw_text = self.restrict_key_input.text().strip()
+        if not raw_text:
+            return
+
+        normalized = normalize_key_name(raw_text)
+        if normalized is None:
+            QMessageBox.warning(
+                self,
+                "Unrecognized Key",
+                f"Couldn't recognize '{raw_text}' as a key.\n\n"
+                "Use a single character (e.g. 'a') or a special key name "
+                "(e.g. esc, shift, ctrl_l, tab, space, enter)."
+            )
+            return
+
+        if normalized not in self.restricted_keys:
+            self.restricted_keys.append(normalized)
+            self.restricted_keys_widget.addItem(normalized)
+            self.save_current_ui_to_config()
+
+        self.restrict_key_input.clear()
+
+    def remove_restricted_key(self):
+        row = self.restricted_keys_widget.currentRow()
+        if row >= 0:
+            self.restricted_keys_widget.takeItem(row)
+            del self.restricted_keys[row]
+            self.save_current_ui_to_config()
+
+    def clear_restricted_keys(self):
+        self.restricted_keys_widget.clear()
+        self.restricted_keys.clear()
+        self.save_current_ui_to_config()
+
     def start_recording_flow(self):
         if self._is_thread_running(self.record_thread):
             if self.record_thread.is_paused:
@@ -637,7 +731,10 @@ class TaskEasierApp(QMainWindow):
 
         self.rec_time_lbl.setText("00:00.0")
 
-        self.record_thread = RecordThread(record_mouse_moves=self.rec_moves_cb.isChecked())
+        self.record_thread = RecordThread(
+            record_mouse_moves=self.rec_moves_cb.isChecked(),
+            excluded_keys=set(self.restricted_keys),
+        )
         self.record_thread.finished_signal.connect(self.on_recording_finished)
         self.record_thread.finished.connect(self._cleanup_record_thread)
         self.record_thread.finished.connect(self.record_thread.deleteLater)
@@ -969,6 +1066,34 @@ class TaskEasierApp(QMainWindow):
         QTabBar::tab:selected {
             background-color: #0284c7;
             color: #ffffff;
+        }
+
+        QScrollArea {
+            background-color: transparent;
+            border: none;
+        }
+        QScrollArea > QWidget > QWidget {
+            background-color: transparent;
+        }
+        QScrollBar:vertical {
+            background-color: #0a0a0c;
+            width: 10px;
+            border-radius: 5px;
+            margin: 0px;
+        }
+        QScrollBar::handle:vertical {
+            background-color: #2a2b30;
+            border-radius: 5px;
+            min-height: 24px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background-color: #475569;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0px;
+        }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            background: none;
         }
 
         QGroupBox {

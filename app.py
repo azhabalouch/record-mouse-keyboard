@@ -2,6 +2,7 @@
 Task Easier — Automation
 Built with PyQt6 using modern Win32 Native SendInput drivers.
 Supports batch macro queue loading and persistent JSON configuration.
+Includes a system-wide floating recording desktop overlay bar.
 """
 
 import sys
@@ -155,6 +156,139 @@ class PlayThread(QThread):
         self.player.seek_to(seconds)
 
 
+class RecordingOverlayWidget(QWidget):
+    """
+    Desktop-wide floating recording widget.
+    Stays on top of all windows at the top right of the primary screen.
+    """
+    def __init__(self, parent_app):
+        super().__init__(None)
+        self.parent_app = parent_app
+
+        # Window Flags for Desktop Floating Overlay
+        self.setWindowFlags(
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        sys_icon = self.style().standardIcon
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.card = QFrame()
+        self.card.setObjectName("overlayCard")
+        card_layout = QHBoxLayout(self.card)
+        card_layout.setContentsMargins(12, 6, 12, 6)
+        card_layout.setSpacing(10)
+
+        self.dot_lbl = QLabel("● REC")
+        self.dot_lbl.setObjectName("overlayActiveDot")
+
+        self.timer_lbl = QLabel("00:00.0")
+        self.timer_lbl.setObjectName("overlayTimer")
+
+        self.pause_btn = QPushButton()
+        self.pause_btn.setObjectName("overlayIconBtn")
+        self.pause_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaPause))
+        self.pause_btn.setToolTip("Pause / Resume Recording")
+        self.pause_btn.clicked.connect(self.parent_app.toggle_top_bar_pause)
+
+        self.stop_btn = QPushButton()
+        self.stop_btn.setObjectName("overlayStopBtn")
+        self.stop_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaStop))
+        self.stop_btn.setToolTip("Stop Recording")
+        self.stop_btn.clicked.connect(self.parent_app.stop_recording)
+
+        card_layout.addWidget(self.dot_lbl)
+        card_layout.addWidget(self.timer_lbl)
+        card_layout.addWidget(self.pause_btn)
+        card_layout.addWidget(self.stop_btn)
+
+        layout.addWidget(self.card)
+        self.apply_overlay_style()
+
+    def update_position(self):
+        """Align the widget to the top-right corner of the primary screen."""
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            x = geo.x() + geo.width() - self.width() - 20
+            y = geo.y() + 20
+            self.move(x, y)
+
+    def set_recording_state(self, is_recording=True, is_paused=False, text="00:00.0"):
+        sys_icon = self.style().standardIcon
+        self.timer_lbl.setText(text)
+        
+        if is_paused:
+            self.dot_lbl.setText("PAUSED")
+            self.dot_lbl.setObjectName("overlayPauseDot")
+            self.pause_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaPlay))
+        else:
+            self.dot_lbl.setText("● REC" if is_recording else "● WAITING")
+            self.dot_lbl.setObjectName("overlayActiveDot" if is_recording else "overlayPauseDot")
+            self.pause_btn.setIcon(sys_icon(QStyle.StandardPixmap.SP_MediaPause))
+
+        self.dot_lbl.setStyle(self.dot_lbl.style())
+
+    def apply_overlay_style(self):
+        self.setStyleSheet("""
+        #overlayCard {
+            background-color: rgba(15, 15, 18, 0.92);
+            border: 1px solid rgba(239, 68, 68, 0.7);
+            border-radius: 12px;
+        }
+        #overlayActiveDot {
+            color: #ef4444;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+        }
+        #overlayPauseDot {
+            color: #f59e0b;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+        }
+        #overlayTimer {
+            color: #f8fafc;
+            font-size: 13px;
+            font-weight: 700;
+            font-family: 'Fira Code';
+            padding-right: 2px;
+        }
+        #overlayIconBtn {
+            background-color: #2a2b30;
+            border: none;
+            border-radius: 10px;
+            min-width: 22px;
+            max-width: 22px;
+            min-height: 22px;
+            max-height: 22px;
+            padding: 0px;
+        }
+        #overlayIconBtn:hover {
+            background-color: #38bdf8;
+        }
+        #overlayStopBtn {
+            background-color: #991b1b;
+            border: none;
+            border-radius: 10px;
+            min-width: 22px;
+            max-width: 22px;
+            min-height: 22px;
+            max-height: 22px;
+            padding: 0px;
+        }
+        #overlayStopBtn:hover {
+            background-color: #dc2626;
+        }
+        """)
+
+
 class TaskEasierApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -186,6 +320,8 @@ class TaskEasierApp(QMainWindow):
         self.play_delay_timer.timeout.connect(self.handle_play_delay_countdown)
         self.play_delay_remaining = 0
 
+        self.overlay_bar = RecordingOverlayWidget(self)
+
         self.init_ui()
         self.apply_theme()
         self.restore_config_to_ui()
@@ -200,6 +336,7 @@ class TaskEasierApp(QMainWindow):
             return False
 
     def closeEvent(self, event):
+        self.overlay_bar.close()
         self.save_current_ui_to_config()
         if self.rec_delay_timer.isActive():
             self.rec_delay_timer.stop()
@@ -464,7 +601,7 @@ class TaskEasierApp(QMainWindow):
         exec_layout.setSpacing(12)
 
         h1 = QHBoxLayout()
-        h1.addWidget(QLabel("Speed Scale:"))
+        h1.addWidget(QLabel("Speed:"))
         self.speed_spin = QDoubleSpinBox()
         self.speed_spin.setRange(0.25, 5.0)
         self.speed_spin.setValue(1.0)
@@ -472,14 +609,14 @@ class TaskEasierApp(QMainWindow):
         self.speed_spin.setSuffix(" x")
         h1.addWidget(self.speed_spin)
 
-        h1.addWidget(QLabel("Loops:"))
+        h1.addWidget(QLabel("Loop:"))
         self.loop_spin = QSpinBox()
         self.loop_spin.setRange(0, 9999)
         self.loop_spin.setValue(1)
         self.loop_spin.setToolTip("Set to 0 for infinite looping")
         h1.addWidget(self.loop_spin)
 
-        h1.addWidget(QLabel("Start Delay:"))
+        h1.addWidget(QLabel("Delay:"))
         self.play_delay_spin = QSpinBox()
         self.play_delay_spin.setRange(0, 30)
         self.play_delay_spin.setValue(0)
@@ -488,7 +625,7 @@ class TaskEasierApp(QMainWindow):
         exec_layout.addLayout(h1)
 
         rnd_layout = QHBoxLayout()
-        self.rnd_delay_cb = QCheckBox("Inject Random Human Delays")
+        self.rnd_delay_cb = QCheckBox("Inject Delays")
         self.rnd_min_spin = QDoubleSpinBox()
         self.rnd_min_spin.setRange(0.0, 5.0)
         self.rnd_min_spin.setValue(0.1)
@@ -694,11 +831,20 @@ class TaskEasierApp(QMainWindow):
         self.restricted_keys.clear()
         self.save_current_ui_to_config()
 
+    def toggle_top_bar_pause(self):
+        """Toggle pause state directly from the desktop floating bar."""
+        if self._is_thread_running(self.record_thread):
+            if self.record_thread.is_paused:
+                self.start_recording_flow()
+            else:
+                self.pause_recording()
+
     def start_recording_flow(self):
         if self._is_thread_running(self.record_thread):
             if self.record_thread.is_paused:
                 self.record_thread.resume()
                 self.rec_status_lbl.setText("RECORDING IN PROGRESS — Press ESC to Stop")
+                self.overlay_bar.set_recording_state(is_recording=True, is_paused=False, text=self.rec_time_lbl.text())
                 self.rec_play_btn.setEnabled(False)
                 self.rec_pause_btn.setEnabled(True)
             return
@@ -711,6 +857,10 @@ class TaskEasierApp(QMainWindow):
             self.rec_play_btn.setEnabled(False)
             self.rec_stop_btn.setEnabled(True)
             self.rec_status_lbl.setText(f"Starting in {self.rec_delay_remaining}s...")
+            
+            self.overlay_bar.show()
+            self.overlay_bar.set_recording_state(is_recording=False, is_paused=True, text=f"{self.rec_delay_remaining}s")
+            self.overlay_bar.update_position()
             self.rec_delay_timer.start()
         else:
             self.execute_start_recording()
@@ -719,6 +869,7 @@ class TaskEasierApp(QMainWindow):
         self.rec_delay_remaining -= 1
         if self.rec_delay_remaining > 0:
             self.rec_status_lbl.setText(f"Starting in {self.rec_delay_remaining}s...")
+            self.overlay_bar.set_recording_state(is_recording=False, is_paused=True, text=f"{self.rec_delay_remaining}s")
         else:
             self.rec_delay_timer.stop()
             self.execute_start_recording()
@@ -742,6 +893,12 @@ class TaskEasierApp(QMainWindow):
 
         self.rec_timer.start()
         self.rec_status_lbl.setText("RECORDING IN PROGRESS — Press ESC to Stop")
+        
+        # Display & Position Floating Desktop Overlay
+        self.overlay_bar.show()
+        self.overlay_bar.set_recording_state(is_recording=True, is_paused=False, text="00:00.0")
+        self.overlay_bar.update_position()
+
         self.rec_play_btn.setEnabled(False)
         self.rec_pause_btn.setEnabled(True)
         self.rec_stop_btn.setEnabled(True)
@@ -754,10 +911,15 @@ class TaskEasierApp(QMainWindow):
         if self._is_thread_running(self.record_thread):
             self.record_thread.pause()
             self.rec_status_lbl.setText("RECORDING PAUSED")
+            
+            # Update Desktop Overlay State
+            self.overlay_bar.set_recording_state(is_recording=True, is_paused=True, text=self.rec_time_lbl.text())
+
             self.rec_play_btn.setEnabled(True)
             self.rec_pause_btn.setEnabled(False)
 
     def stop_recording(self):
+        self.overlay_bar.hide()
         if self.rec_delay_timer.isActive():
             self.rec_delay_timer.stop()
             self.rec_play_btn.setEnabled(True)
@@ -775,9 +937,16 @@ class TaskEasierApp(QMainWindow):
         if self._is_thread_running(self.record_thread):
             elapsed = self.record_thread.get_elapsed_time()
             mins, secs = divmod(elapsed, 60)
-            self.rec_time_lbl.setText(f"{int(mins):02d}:{secs:04.1f}")
+            formatted_time = f"{int(mins):02d}:{secs:04.1f}"
+            self.rec_time_lbl.setText(formatted_time)
+            self.overlay_bar.set_recording_state(
+                is_recording=True,
+                is_paused=self.record_thread.is_paused,
+                text=formatted_time
+            )
 
     def on_recording_finished(self, events):
+        self.overlay_bar.hide()
         self.rec_timer.stop()
         filename = self.filename_input.text().strip()
         if not filename.endswith(".json"):
@@ -947,9 +1116,7 @@ class TaskEasierApp(QMainWindow):
             self.play_status_lbl.setText("PLAYBACK PAUSED")
 
     def _cleanup_play_thread(self):
-        """Tear down the current play thread without deciding what happens to the batch.
-        Used both when the user hits Stop (whole batch aborts) and when a single
-        queued item errors out (batch should continue to the next item)."""
+        """Tear down the current play thread without deciding what happens to the batch."""
         if self.play_thread is not None:
             try:
                 self.play_thread.finished_signal.disconnect(self.on_single_playback_finished)
@@ -1006,7 +1173,7 @@ class TaskEasierApp(QMainWindow):
         self.update_playback_time_label(0.0)
         self.play_status_lbl.setText("BATCH QUEUE COMPLETED")
 
-    # --- MODERN STYLESHEET (9/10 UPGRADE) ---
+    # --- STYLESHEET ---
     def apply_theme(self):
         qss = """
         QMainWindow {
@@ -1014,7 +1181,7 @@ class TaskEasierApp(QMainWindow):
         }
         QWidget {
             color: #f1f5f9;
-            font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, sans-serif;
+            font-family: 'Roboto';
             font-size: 13px;
         }
         #appTitle {
@@ -1138,7 +1305,7 @@ class TaskEasierApp(QMainWindow):
             font-size: 34px;
             font-weight: 800;
             color: #38bdf8;
-            font-family: 'Consolas', 'Courier New', monospace;
+            font-family: 'Fira Code';
         }
         #statusLabel {
             font-size: 11px;
@@ -1158,15 +1325,11 @@ class TaskEasierApp(QMainWindow):
             border-color: #38bdf8;
         }
 
-        /* ============================================================================
-        SPINBOX & DOUBLE SPINBOX - MODERN INTEGRATED CONTROL TRACK
-        ============================================================================ */
-
         QSpinBox, QDoubleSpinBox {
             background-color: #0b0f19;
             border: 1px solid #1e293b;
             border-radius: 8px;
-            padding: 6px 32px 6px 14px;
+            padding: 6px 16px 6px 14px;
             color: #f8fafc;
             font-weight: 600;
             min-height: 28px;
